@@ -1,0 +1,84 @@
+source,target,value
+DR,EF,65.8
+DR,loss1,0.5
+BF,EF,44.6
+BF,OBC,826.2
+BF,OHF,34
+BF,FIC,23.6
+BF,loss1,6.8
+SP,loss1,5.7
+SP,EF,351
+SP,OBC,206
+SP,FIC,11.6
+EF,SM,410.3
+EF,loss2,51.2
+OBC,SM,898.8
+OBC,loss2,133.8
+OHF,SM,29.6
+OHF,loss2,4.4
+SM,CC bloom,100.6
+SM,CC billet,487.6
+SM,CC slab,646.7
+SM,ingot casting,89.1
+SM,SPC,4
+SM,loss3,10.5
+scrap iron and additives,FIC,33.6
+CC bloom,SEM,99.2
+CC bloom,SPC,0.7
+CC bloom,loss4,0.6
+CC bloom,CC bloom,3.3
+CC billet,RBM,442.2
+CC billet,HSM,41.8
+CC billet,SP,2
+ingot casting,SPC,6.7
+ingot casting,PRM,82
+ingot casting,loss4,0.5
+ingot casting,ingot casting,1.4
+SPC,cast steel/iron,10.5
+SPC,loss4,0.1
+SPC,SPC,9.6
+FIC,cast steel/iron,68.3
+FIC,loss4,0.5
+FIC,FIC,34.7
+PRM,SEM,5.2
+PRM,RBM,49.1
+PRM,PLM,6.9
+PRM,HSM,14.6
+PRM,SP,5.3
+PRM,loss5,0.8
+SEM,sections,94
+SEM,SP,8.9
+SEM,loss6,1.6
+RBM,STP,30
+RBM,bar and rod,431.8
+RBM,SP,22
+RBM,loss6,7.5
+PLM,TWP,15
+PLM,plate,110
+PLM,SP,12.3
+PLM,loss6,1.6
+HSM,TWP,51.7
+HSM,CRM,288.1
+HSM,GP,10.3
+HSM,hot rolled coil,190
+CC billet,loss4,1.6
+CC billet,CC billet,8.8
+CC slab,PLM,132
+CC slab,HSM,508
+CC slab,SP,3.7
+CC slab,loss4,3
+CC slab,CC slab,16.5
+TWP,tube,62.4
+TWP,SP,4.3
+CRM,cold rolled coil,145.3
+CRM,GP,116.1
+HSM,SP,18.8
+HSM,loss6,5.6
+STP,tube,27.7
+STP,SP,2.3
+CRM,SP,14.2
+GP,cold rolled coil,113.2
+GP,hot rolled coil,10
+GP,SP,3.2
+TM,cold rolled coil,11.6
+TM,SP,0.8
