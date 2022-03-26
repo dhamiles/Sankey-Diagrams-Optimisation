@@ -1,0 +1,3 @@
+source,target,type,value
+node1,node4,top,5
+node2,node3,bottom,5

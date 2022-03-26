@@ -1,4 +1,5 @@
 # Module containing the functions for flow data set manipulation
+from floweaver import *
 
 ## Function that will assemble the nodes dictionary
 def generate_nodes(node_def, group_by = 'id'):

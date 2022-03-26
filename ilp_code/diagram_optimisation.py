@@ -1,4 +1,6 @@
 # Module containing all the functions for Floweaver SDD optimisation
+from mip import *
+from functools import cmp_to_key
 
 # Function that returns the inputs required for the optimisation model to function
 def model_inputs(sankey_data):
@@ -70,7 +72,11 @@ def model_inputs(sankey_data):
     return model_inputs
 
 ## Function that takes in the inputs and optimises the model 
-def optimise_node_order(model_inputs):
+def optimise_node_order(model_inputs, group_nodes = False):
+
+    # Raise an error if the 
+    if group_nodes and ('group_ordering' or 'groups') not in model_inputs.keys():
+        raise Exception('The provided model input does not contain the key \'node_groups')
     
     ### Define the model
     m = Model("sankey")
@@ -93,6 +99,26 @@ def optimise_node_order(model_inputs):
 
     # Create a dictionary of binary decision variables called 'x' containing the relative positions of the nodes in a layer
     x = { k: m.add_var(var_type=BINARY) for layer in pairs_by_layer for k in layer }
+
+    # If utilising group_nodes then execute the following code
+    if group_nodes:
+
+        group_ordering = model_inputs['group_ordering']
+        groups = model_inputs['groups']
+
+        # Create a list of all the y binary variables (regarding the relative position of nodes to node groups)
+        node_group_pairs = [ [] for layer in node_layer_set ]
+
+        # The group_ordering is done by LAYER only - just like node_layer_set.
+        for i in range(len(node_layer_set)):
+            for U in group_ordering[i]:
+                for u2 in node_layer_set[i]:
+                    # Only add the pairing IF the node, u2 is not in the group U.
+                    if u2 not in groups[U]:
+                        node_group_pairs[i].append((U,u2))
+
+        # Now generate all the binary variables 'y' for the relative position of node_groups and nodes 
+        y = { k: m.add_var(var_type=BINARY) for layer in node_group_pairs for k in layer }
     
     # Create a dictionary of binary decision variables called 'c' containing whether any two edges cross
     c_main_main = { (u1v1,u2v2): m.add_var(var_type=BINARY) for Ek in edges for u1v1 in Ek for u2v2 in Ek
@@ -152,6 +178,29 @@ def optimise_node_order(model_inputs):
                           )
     
     ### Constraints section, the following cells will contain all the constraints to be added to the model
+
+    # If grouping nodes generate the required constraints 
+    if group_nodes:
+
+        #########################################
+        for i in range(len(node_layer_set)):
+            for u1 in node_layer_set[i]:
+
+                # First figure out what group u1 is in
+                U = ''
+                for group in groups:
+                    if u1 in groups[group]:
+                        U = group
+
+                for u2 in node_layer_set[i]:
+
+                    if U: # Check if U is an empty string, meaning not in a group
+
+                        # Apply the constraint ONLY if u2 not in U
+                        if u2 not in groups[U]:
+
+                            # Add the constraint
+                            m += (y[U,u2] == x[u1,u2])
 
     ## Constraints for the ordering variables 'x'
     layer_index = 0
