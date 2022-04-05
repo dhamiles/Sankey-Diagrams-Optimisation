@@ -1,19 +1,54 @@
 # Module containing the functions for flow data set manipulation
 from floweaver import *
 
+## Helper function
+def isNaN(num):
+    return num != num
+
 ## Function that will assemble the nodes dictionary
-def generate_nodes(node_def, group_by = 'id'):
+def generate_nodes(node_def, group_by = 'id', node_uid = 'id', partition_groups = None):
     # Loop through the dictionary and find all distinct node types and add them to the node dictionary
     node_types = []
     nodes = {}
+    group_lists = {}
     for node in node_def:
-        if node[group_by] not in node_types:
+        
+        # If NaN means the group_by field for that node is empty 
+        if isNaN(node[group_by]):
+            # Add the node_uid as a node since not a part of a group
+            nodes[node[node_uid]] = ProcessGroup(node_uid + ' == "' + node[node_uid] + '"')
+        
+        elif node[group_by] not in node_types:
             nodes[node[group_by]] = ProcessGroup(group_by + ' == "' + node[group_by] + '"')
+            
+            # Populate the group_lists dictionary
+            if partition_groups == 'all':
+                group_lists[node[group_by]] = []
+                group_lists[node[group_by]].append(node[node_uid])
+                
+            elif partition_groups and node[group_by] in partition_groups:
+                group_lists[node[group_by]] = []
+                group_lists[node[group_by]].append(node[node_uid])
+                
             node_types.append(node[group_by])  
+            
+        # If the group_by already visited, need to add to the group_lists regardless
+        else: 
+            # Populate the group_lists dictionary
+            if partition_groups == 'all':
+                group_lists[node[group_by]].append(node[node_uid])
+                
+            elif partition_groups and node[group_by] in partition_groups:
+                group_lists[node[group_by]].append(node[node_uid])
+                
+    # Now loop through group_lists and add all the partitions 
+    for group in group_lists:
+        nodes[group].partition = Partition.Simple('process', group_lists[group])
+
     return nodes
 
 ## Assemble the ordering array
-def generate_ordering(node_def, group_by='id'):
+def generate_ordering(node_def, group_by='id', node_uid='id'):
     # Will first loop through and determine the dimension for the ordering array
     layers = 0
     bands = 0
@@ -26,7 +61,10 @@ def generate_ordering(node_def, group_by='id'):
     # NOTE: This is limited to the assumption that all nodes in a group are in the same layer/band
     visited = []
     for node in node_def:
-        if node[group_by] not in visited:
+        
+        if isNaN(node[group_by]):
+            ordering[node['layer']][node['band']].append(node[node_uid])
+        elif node[group_by] not in visited:
             visited.append(node[group_by])
             ordering[node['layer']][node['band']].append(node[group_by])
     
@@ -45,8 +83,6 @@ def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id'
     node_bands = {}
     for node in node_def:
         node_bands[node['id']] = node['band']
-        
-    #print(node_layers)
 
     reverse_present = False # Variable declaring whether a reverse waypoint 'band' has been created
     
@@ -56,9 +92,7 @@ def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id'
     node_group = {}
     for node in node_def:
         node_group[node['id']] = node[group_by]
-    
-    #print(node_group)
-    
+
     for flow in flows:
         
         # Create a flow_selection if required

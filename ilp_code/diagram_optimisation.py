@@ -3,7 +3,7 @@ from mip import *
 from functools import cmp_to_key
 
 # Function that returns the inputs required for the optimisation model to function
-def model_inputs(sankey_data):
+def model_inputs(sankey_data, group_nodes = False):
 
     ## Create the node band/layer sets for the model and a dictionary of node:{layer,band}
     order = sankey_data.ordering.layers
@@ -68,6 +68,44 @@ def model_inputs(sankey_data):
         'return_edges': return_edges,
         'edge_weight': edge_weight
     }
+    
+    # If the nodes are being grouped:
+    if group_nodes:
+        
+        # Create the group_ordering list
+        group_ordering = [ [] for layer in order ]
+        groups = {}
+        
+        ##### LOOP THROUGH ALL THE LAYERS IN THE ORDER, IF ENDS WITH * THEN NOT A GROUP!
+        # IN TURN ADD THE GROUPS TO THE ORDER, AND CONSTRUCT THE GROUPS, BY SPLITTING ON THE CARROT
+        # Loop through all the layer indices
+        for i in range(len(order)):
+            
+            # Loop through each band in each layer
+            for band in order[i]:
+                
+                # Loop through each node within the band:
+                for node in band:
+                    
+                    # Create temp variable of the node split 
+                    temp = node.split('^')
+                    # If the second item in the list is a * then its not part of a group, can ignore
+                    if temp[1] != '*':
+                        
+                        # If the group not already in groups dictionary
+                        if temp[0] not in groups.keys():
+                            groups[temp[0]] = []
+                        
+                        # Add the node to the list
+                        groups[temp[0]].append(node)
+                        
+                        # If the group not in the ordering, add it to the ordering
+                        if temp[0] not in group_ordering[i]:
+                            group_ordering[i].append(temp[0])
+        
+        # Add the two new model parameters to the model dict
+        model_inputs['groups'] = groups
+        model_inputs['group_ordering'] = group_ordering
     
     return model_inputs
 
