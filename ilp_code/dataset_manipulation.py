@@ -71,18 +71,18 @@ def generate_ordering(node_def, group_by='id', node_uid='id'):
     return ordering
 
 ## Function that returns the ordering, nodes and bundles
-def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id'):
+def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id', node_uid = 'id'):
     # Function takes in everything required to make decisions and output updated definition
     
     # Generate a dictionary of nodes:layer pairs to increase code efficiency
     node_layers = {}
     for node in node_def:
-        node_layers[node['id']] = node['layer']
+        node_layers[node[node_uid]] = node['layer']
         
     # Generate a dictionary of nodes:bands pairs to increase code efficiency
     node_bands = {}
     for node in node_def:
-        node_bands[node['id']] = node['band']
+        node_bands[node[node_uid]] = node['band']
 
     reverse_present = False # Variable declaring whether a reverse waypoint 'band' has been created
     
@@ -91,7 +91,10 @@ def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id'
     # Generate a dictionary of nodes:group_by pairs to increase code efficiency
     node_group = {}
     for node in node_def:
-        node_group[node['id']] = node[group_by]
+        if isNaN(node[group_by]):
+            node_group[node[node_uid]] = node[node_uid]
+        else:
+            node_group[node[node_uid]] = node[group_by]
 
     for flow in flows:
         
@@ -101,6 +104,8 @@ def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id'
         # Store the node layers in variables for code clarity
         target = node_layers[flow['target']]
         source = node_layers[flow['source']]
+        
+        #print(node_group[flow['source']],node_group[flow['target']])
         
         # If the target is in the same or prior layer to the source
         if (target <= source) and (flow['source'] != flow['target']):
@@ -119,8 +124,16 @@ def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id'
                     ordering[layer][-1].append('wp' + str(layer))
                     nodes['wp' + str(layer)] = Waypoint(direction='L', title = '')
             
-            # If in the same layer then only one waypoint required
-            if target == source and (Bundle(node_group[flow['source']],
+            # If group is the same but the node is different need to add the flow selection
+            if (node_group[flow['source']] == node_group[flow['target']]) and (Bundle(node_group[flow['source']],
+                     node_group[flow['target']],
+                     flow_selection = fs)) not in bundles:
+                bundles.append(Bundle(node_group[flow['source']],
+                                  node_group[flow['target']],
+                                  flow_selection = fs))
+            
+            # If in the same layer then only one waypoint required 
+            elif target == source and (Bundle(node_group[flow['source']],
                                            node_group[flow['target']],
                                            waypoints=['wp' + str(source)]) not in bundles):
                 bundles.append(Bundle(node_group[flow['source']],
@@ -176,10 +189,9 @@ def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id'
                                   flow_selection = fs))
                        
         # ELSE: if not a reverse or a long flow its going to be a normal short flow. Simple bundle
-        else:
-            if (Bundle(node_group[flow['source']],
-                       node_group[flow['target']]) not in bundles):
-                bundles.append(Bundle(node_group[flow['source']],
+        elif (flow['source'] != flow['target']) and (Bundle(node_group[flow['source']],
+                   node_group[flow['target']]) not in bundles):
+            bundles.append(Bundle(node_group[flow['source']],
                                       node_group[flow['target']]))
         
     return ordering, nodes, bundles
