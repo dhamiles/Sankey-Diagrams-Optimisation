@@ -365,3 +365,174 @@ def optimise_node_order(model_inputs, group_nodes = False):
             start_index = end_index
             
     return banded_order
+
+# Create a function that creates all the required inputs for the straightness optimisation model 
+def straightness_model(sankey_data):
+    
+    ## Create the node_layer_set
+    order = sankey_data.ordering.layers
+    node_layer_set = [ [] for i in range(len(order))]
+    node_band_set = [ [] for i in range(len(order[0]))]
+    node_dict = {}
+    
+    # loop through and add all the nodes into the node layer set
+    for i in range(len(order)):
+        for j in range(len(order[i])):
+            for k in order[i][j]:
+                # Append in correct locations 
+                node_layer_set[i].append(k)
+                node_band_set[j].append(k)
+                # Add to the node_dict in correct location
+                node_dict[k] = {'layer':i, 'band':j, 'w_in':0, 'w_out':0}
+                
+    # Create the flows list
+    flows = sankey_data.links
+    # Create the empty edges dictionary
+    edges = []
+    # Create edge weights dictionary
+    edge_weight = {}
+    
+    for flow in flows:
+        
+        sl = node_dict[flow.source]['layer'] # save source layer to variable
+        tl = node_dict[flow.target]['layer'] # save target layer to variable
+        
+        # Ensure we are only considering the forward/main flows
+        if sl < tl:
+            edges.append((flow.source,flow.target))
+            edge_weight[(flow.source,flow.target)] = flow.data['value']
+            
+    # Determine the 'node weights' by assertaining the maximum of either in or out of each node
+    for flow in flows:
+        
+        # Calculate the maximum possible weight of each node 
+        node_dict[flow.source]['w_out'] += flow.data['value']
+        node_dict[flow.target]['w_in'] += flow.data['value']
+        
+    # Figure out the maximum weight and assign it to a dictionary of node weightings 
+    node_weight = {}
+    for node in node_dict:
+        # Assign value of the max weight!
+        node_weight[node] = max(node_dict[node]['w_in'], node_dict[node]['w_out'])
+        
+    model_inputs  = {
+        'node_layer_set': node_layer_set,
+        'node_band_set': node_band_set,
+        'edges': edges,
+        'edge_weight': edge_weight,
+        'node_weight': node_weight
+    }
+    
+    return model_inputs
+        
+# Define a new function for optimising the vertical position
+def optimise_position(model_inputs, wslb = 1):
+    
+    ### Define the model
+    m = Model("sankey")
+    
+    # Unpack the model input dictionary
+    node_layer_set = model_inputs['node_layer_set']
+    node_band_set = model_inputs['node_band_set']
+    edges = model_inputs['edges']
+    edge_weight = model_inputs['edge_weight']
+    node_weight = model_inputs['node_weight']
+    
+    y = { node: m.add_var(name=f'y[{node}]', var_type=CONTINUOUS) 
+         for layer in node_layer_set for node in layer
+        }
+    
+    # Create the white space variables 
+    d = {}
+    for i in range(len(node_layer_set)):
+        
+        # Add the base_line to first node variable
+        d[('b',node_layer_set[i][0])] = m.add_var(var_type=CONTINUOUS, lb = 0)
+        
+        # loop through all the pairings
+        for j in range(len(node_layer_set[i])):
+            if j+1 != len(node_layer_set[i]):
+                d[(node_layer_set[i][j],node_layer_set[i][j+1])] = m.add_var(var_type=CONTINUOUS, lb = wslb)
+                
+    # Create all the deviation variables
+    s = {}
+    for edge in edges:
+        s[edge] = m.add_var(var_type=CONTINUOUS)
+        
+    ### Now go through and create the constraints
+    
+    ## First create the constraints linking y values to white_spaces and weights
+    
+    # Create the list of lists containing all the variables for each node y coord to perform xsum!
+    node_lists = {}
+    for layer in node_layer_set:
+        
+        # Loop through all the nodes in the layer and do it accordingly
+        for i, node in enumerate(layer):
+            node_lists[node] = []
+            # All nodes require the baseline spacing
+            node_lists[node].append(d[('b',layer[0])])
+            if i != 0:
+                # If not the first node, need to add whitespace for all prior node pairs and prior node weights
+                for j in range(i):
+                    # If i+1 is in range
+                    if j+1 != len(node_layer_set[i]):
+                        # For each node up to i add the weight
+                        node_lists[node].append(node_weight[layer[j]])
+                        node_lists[node].append(d[(layer[j],layer[j+1])])
+            # Now the list has been assembled add the constraint!
+            m += (y[node] == xsum(node_lists[node][i] for i in range(len(node_lists[node]))))
+                
+    ## Create all the straightness constraints
+
+    # Loop through all the edges and add the two required constraints 
+    for (u,v) in edges:
+        m += (s[(u,v)] >= y[u] - y[v])
+        m += (s[(u,v)] >= -(y[u] - y[v]))
+
+    ## Create all the band constraints (ie higher bands above lower bands)
+
+    # Loop through the node_band_set and add all the nodes accordingly 
+    # First loop through 
+    for i, bandu in enumerate(node_band_set):
+        for u in bandu:
+
+            # Now for each 'u' node loop through all the other nodes
+            for j, bandv in enumerate(node_band_set):
+                for v in bandv:
+
+                    # Only add the constraint if the second band is greater than the first
+                    if j > i:
+                        m += (y[v] >= y[u])
+
+    ### OBJECTIVE FUNCTION: MINIMISE DEVIATION * FLOW WEIGHT
+    m.objective = minimize( xsum(s[edge]*edge_weight[edge] for edge in s.keys()) )
+
+    # Run the model and optimise!
+    status = m.optimize()
+
+    ### Decode the solution by running through and creating simplified dictionary
+    y_coordinates = {}
+    for node in y:
+        y_coordinates[node] = y[node].x
+
+    return y_coordinates
+
+
+
+
+
+
+
+
+    
+                  
+    
+    
+                
+                
+        
+    
+    
+
+        
