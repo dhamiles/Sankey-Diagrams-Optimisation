@@ -1,0 +1,11 @@
+source,target,value
+n0,n3,5
+n0,n4,2
+n0,n5,6
+n1,n4,8
+n2,n5,6
+n3,n6,6
+n3,n7,3
+n4,n8,4
+n5,n7,3
+n5,n8,4

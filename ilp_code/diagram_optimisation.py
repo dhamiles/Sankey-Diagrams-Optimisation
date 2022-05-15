@@ -1,6 +1,8 @@
 # Module containing all the functions for Floweaver SDD optimisation
 from mip import *
 from functools import cmp_to_key
+from ipysankeywidget import SankeyWidget
+from ipywidgets import Layout, Output
 
 # Function that returns the inputs required for the optimisation model to function
 def model_inputs(sankey_data, group_nodes = False):
@@ -476,7 +478,8 @@ def optimise_position(model_inputs, wslb = 1):
                 # If not the first node, need to add whitespace for all prior node pairs and prior node weights
                 for j in range(i):
                     # If i+1 is in range
-                    if j+1 != len(node_layer_set[i]):
+                    #if j+1 != len(node_layer_set[i]):
+                    if j+1 != len(layer):
                         # For each node up to i add the weight
                         node_lists[node].append(node_weight[layer[j]])
                         node_lists[node].append(d[(layer[j],layer[j+1])])
@@ -503,7 +506,7 @@ def optimise_position(model_inputs, wslb = 1):
 
                     # Only add the constraint if the second band is greater than the first
                     if j > i:
-                        m += (y[v] >= y[u])
+                        m += (y[v] >= y[u] + node_weight[u])
 
     ### OBJECTIVE FUNCTION: MINIMISE DEVIATION * FLOW WEIGHT
     m.objective = minimize( xsum(s[edge]*edge_weight[edge] for edge in s.keys()) )
@@ -519,8 +522,445 @@ def optimise_position(model_inputs, wslb = 1):
     return y_coordinates
 
 
+# Helper function to plot widget including position forcing that currently is not in the to_widget method
+def create_widget(
+        sdd,
+        width=700,
+        height=500,
+        margins=None,
+        align_link_types=False,
+        link_label_format="",
+        link_label_min_width=5,
+        debugging=False,
+        forceY=None,
+        y_scale=1
+    ):
+
+    if SankeyWidget is None:
+        raise RuntimeError("ipysankeywidget is required")
+
+    if margins is None:
+        margins = {
+            "top": 25,
+            "bottom": 10,
+            "left": 130,
+            "right": 130,
+        }
+
+    value = sdd.to_json(format="widget")
+    
+    # Assertain the max possible space inc margins
+    max_w = width - margins['left'] - margins['right']
+
+    # If forceY exists then force the y coordinates
+    if forceY:
+        # Loop through all the layers
+        for i, layer in enumerate(value['order']):
+            # Loop through each band in the order
+            for band in layer:
+                # Loop through all the nodes in each band:
+                for node in band:
+                    # Need to loop through the nodes dict and add the force coords
+                    for n in value['nodes']:
+                        # If the n[id] matches node then add the positions
+                        if node == n['id']:
+                            n['position'] = [ (i*max_w)/(len(value['order'])-1), forceY[node]*y_scale]
+
+    if forceY:
+        widget = SankeyWidget(
+            nodes=value["nodes"],
+            links=value["links"],
+            order=value["order"],
+            groups=value["groups"],
+            align_link_types=align_link_types,
+            linkLabelFormat=link_label_format,
+            linkLabelMinWidth=link_label_min_width,
+            layout= Layout(width=str(width), height=str(height)),
+            margins=margins,
+            node_position_attr = 'position'
+        )
+        widget.scale = y_scale
+
+    else:
+        widget = SankeyWidget(
+            nodes=value["nodes"],
+            links=value["links"],
+            order=value["order"],
+            groups=value["groups"],
+            align_link_types=align_link_types,
+            linkLabelFormat=link_label_format,
+            linkLabelMinWidth=link_label_min_width,
+            layout= Layout(width=str(width), height=str(height)),
+            margins=margins,
+        )
+
+    return widget
 
 
+# Code for running the multi-objective MIP model
+def optimise_hybrid_model(straightness_model, 
+                          crossing_model, 
+                          group_nodes = False, 
+                          wslb = 1,
+                          wsub = 10,
+                          crossing_weight = 0.5,
+                          straightness_weight = 0.5):
+    
+    ### Define the model
+    m = Model("sankey")
+    
+    ##########################################################################################################
+    # MINIMISE THE CROSSINGS MODEL
+    ##########################################################################################################
+    
+    # Raise an error if the 
+    if group_nodes and ('group_ordering' or 'groups') not in crossing_model.keys():
+        raise Exception('The provided model input does not contain the key \'node_groups')
+    
+    # Unpack the model input dictionary
+    node_layer_set = crossing_model['node_layer_set']
+    node_band_set = crossing_model['node_band_set']
+    edges = crossing_model['edges']
+    exit_edges = crossing_model['exit_edges']
+    return_edges = crossing_model['return_edges']
+    edge_weight = crossing_model['edge_weight']
+    
+    # Create a list of all the node pairings in each layer
+    pairs_by_layer = [[ (u1,u2) for u1 in layer 
+                       for u2 in layer 
+                       if u1 != u2 ] 
+                      for layer in node_layer_set ]
+    
+    ### Binary Decision Variables Section
+
+    # Create a dictionary of binary decision variables called 'x' containing the relative positions of the nodes in a layer
+    x = { k: m.add_var(var_type=BINARY) for layer in pairs_by_layer for k in layer }
+
+    # If utilising group_nodes then execute the following code
+    if group_nodes:
+
+        group_ordering = crossing_model['group_ordering']
+        groups = crossing_model['groups']
+
+        # Create a list of all the y binary variables (regarding the relative position of nodes to node groups)
+        node_group_pairs = [ [] for layer in node_layer_set ]
+
+        # The group_ordering is done by LAYER only - just like node_layer_set.
+        for i in range(len(node_layer_set)):
+            for U in group_ordering[i]:
+                for u2 in node_layer_set[i]:
+                    # Only add the pairing IF the node, u2 is not in the group U.
+                    if u2 not in groups[U]:
+                        node_group_pairs[i].append((U,u2))
+
+        # Now generate all the binary variables 'y' for the relative position of node_groups and nodes 
+        g = { k: m.add_var(var_type=BINARY) for layer in node_group_pairs for k in layer }
+    
+    # Create a dictionary of binary decision variables called 'c' containing whether any two edges cross
+    c_main_main = { (u1v1,u2v2): m.add_var(var_type=BINARY) for Ek in edges for u1v1 in Ek for u2v2 in Ek
+                   if u1v1 != u2v2 
+                  }
+    
+    # Dictionary for binary decision variables for an 'exit' flow crossing with a 'forward' flow
+    c_exit_forward = { (u1v1,u2wp): m.add_var(var_type=BINARY) for Ek in edges for Ee in exit_edges
+                    # Check if the edges are in the same layer or not
+                      if edges.index(Ek) == exit_edges.index(Ee)
+                      for u1v1 in Ek for u2wp in Ee
+                      # Ignore edges from the same starting node 'u'
+                      if u1v1[0] != u2wp[0]
+                     }
+    
+    # Dictionary of binary decision variables for the crossing of two 'exit' flows
+    c_exit_exit = { (u1wp1,u2wp2): m.add_var(var_type=BINARY) for Ee in exit_edges for u1wp1 in Ee for u2wp2 in Ee
+                   # Do not add variable for a flow crossing itself
+                   if u1wp1 != u2wp2
+                  }
+    
+    # Dictionary of binary decision variables for the crossing of return and forward flows
+    c_return_forward = { (u1v1,wpv2): m.add_var(var_type=BINARY) for Ek in edges for Er in return_edges
+                        # Check if the return flow is one layer in front of the forward flow
+                        if edges.index(Ek) + 1 == return_edges.index(Er)
+                        for u1v1 in Ek
+                        for wpv2 in Er
+                        # Ignore edges to the same 'v' node
+                        if u1v1[1] != wpv2[1]
+                       }
+    
+    # Dictionary of binary decision variables for the crossing of two 'return' flows
+    c_return_return = { (wp1v1,wp2v2): m.add_var(var_type=BINARY) for Er in return_edges for wp1v1 in Er for wp2v2 in Er
+                       # Do not add variable for a flow crossing itself
+                       if wp1v1 != wp2v2
+                      }
+    
+    ### Constraints section, the following cells will contain all the constraints to be added to the model
+
+    # If grouping nodes generate the required constraints 
+    if group_nodes:
+
+        for i in range(len(node_layer_set)):
+            for u1 in node_layer_set[i]:
+
+                # First figure out what group u1 is in
+                U = ''
+                for group in groups:
+                    if u1 in groups[group]:
+                        U = group
+
+                for u2 in node_layer_set[i]:
+
+                    if U: # Check if U is an empty string, meaning not in a group
+
+                        # Apply the constraint ONLY if u2 not in U
+                        if u2 not in groups[U]:
+
+                            # Add the constraint
+                            m += (g[U,u2] == x[u1,u2])
+
+    ## Constraints for the ordering variables 'x'
+    layer_index = 0
+    for layer in node_layer_set:
+        for u1 in layer:
+            for u2 in layer:
+                # Do not refer a node to itself
+                if u1 != u2:
+                    # x is Binary, either u1 above u2 or u2 above u1 (total of the two 'x' values must be 1)
+                    m += (x[u1,u2] + x[u2,u1] == 1)
+
+                    ## Band constraints
+                    # return the relative band positions of u1 and u2
+                    for band in node_band_set:
+                        # Find the band index for u1 and u2
+                        if u1 in band[layer_index]:
+                            u1_band = node_band_set.index(band)
+                        if u2 in band[layer_index]:
+                            u2_band = node_band_set.index(band)
+                    # Determine 'x' values based off the band indices (note 0 is the highest band)
+                    if u1_band < u2_band:
+                        m += (x[u1,u2] == 1)
+                    elif u1_band > u2_band:
+                        m += (x[u1,u2] == 0)
+                    # No else constraint necessary
+
+                    ## Transitivity Constraints 
+                    for u3 in layer:
+                        if u1 != u3 and u2 != u3:
+                            m += (x[u3,u1] >= x[u3,u2] + x[u2,u1] - 1)
+        # Increment the current layer by 1
+        layer_index += 1  
+    
+    ## Constraints for c_main_main
+    for Ek in edges:
+        for (u1,v1) in Ek:
+            for (u2,v2) in Ek:
+                # Only consider 'c' values for crossings where the edges are not the same and the start/end nodes are different
+                if (u1,v1) != (u2,v2) and u1 != u2 and v1 != v2:
+                    m += (c_main_main[(u1,v1),(u2,v2)] + x[u2,u1] + x[v1,v2] >= 1)
+                    m += (c_main_main[(u1,v1),(u2,v2)] + x[u1,u2] + x[v2,v1] >= 1)
+    
+    ## Constraits for c_exit_forward
+    for Ek in edges:
+        for Ee in exit_edges:
+            # Only consider the combinations of edges where the edges are in the same layer
+            if edges.index(Ek) == exit_edges.index(Ee):
+                for (u1,v1) in Ek:
+                    for (u2,wp) in Ee:
+                        # Only consider 'c' values for the crossings where the starting nodes is NOT the same
+                        if u1 != u2:
+                            m += (c_exit_forward[(u1,v1),(u2,wp)] + x[u2,u1] + x[u1,wp] >= 1)
+                            m += (c_exit_forward[(u1,v1),(u2,wp)] + x[u1,u2] + x[wp,u1] >= 1)
+                            
+    ## Constraints for c_exit_exit
+    for Ee in exit_edges:
+        for (u1,wp1) in Ee:
+            for (u2,wp2) in Ee:
+                # Only consider 'c' values for the crossings where the start and waypoints are not the same
+                if u1 != u2 and wp1 != wp2:
+                    m += (c_exit_exit[(u1,wp1),(u2,wp2)] + x[u1,u2] + x[u2,wp1] + x[wp1,wp2] >= 1)
+                    m += (c_exit_exit[(u1,wp1),(u2,wp2)] + x[u2,u1] + x[wp1,u2] + x[wp2,wp1] >= 1)
+                    m += (c_exit_exit[(u1,wp1),(u2,wp2)] + x[u1,wp2] + x[wp2,wp1] + x[wp1,u2] >= 1)
+                    m += (c_exit_exit[(u1,wp1),(u2,wp2)] + x[wp2,u1] + x[wp1,wp2] + x[u2,wp1] >= 1)
+                    m += (c_exit_exit[(u1,wp1),(u2,wp2)] + x[wp1,u2] + x[u2,u1] + x[u1,wp2] >= 1)
+                    m += (c_exit_exit[(u1,wp1),(u2,wp2)] + x[u2,wp1] + x[u1,u2] + x[wp2,u1] >= 1)
+                    m += (c_exit_exit[(u1,wp1),(u2,wp2)] + x[wp1,wp2] + x[wp2,u1] + x[u1,u2] >= 1)
+                    m += (c_exit_exit[(u1,wp1),(u2,wp2)] + x[wp2,wp1] + x[u1,wp2] + x[u2,u1] >= 1)
+                    
+    ## Constraints for c_return_forward
+    for Ek in edges:
+        for Er in return_edges:
+            # Only consider 'c' values if the return flow is one layer in front of the forward flow
+            if edges.index(Ek) + 1 == return_edges.index(Er):
+                for (u1,v1) in Ek:
+                    for (wp,v2) in Er:
+                        # Only consider values where the final nodes are not the same
+                        # AND the final node of the main flow is not the waypoint
+                        if v1 != v2 and v1 != wp:
+                            m += (c_return_forward[(u1,v1),(wp,v2)] + x[v2,v1] + x[v1,wp] >= 1)
+                            m += (c_return_forward[(u1,v1),(wp,v2)] + x[v1,v2] + x[wp,v1] >= 1)
+
+    ## Constraints for c_return_return
+    for Er in return_edges:
+        for (wp1,v1) in Er:
+            for (wp2,v2) in Er:
+                # Only consider edges where the waypoint and end nodes are not the same
+                if wp1 != wp2 and v1 != v2:
+                    m += (c_return_return[(wp1,v1),(wp2,v2)] + x[v1,v2] + x[v2,wp1] + x[wp1,wp2] >= 1)
+                    m += (c_return_return[(wp1,v1),(wp2,v2)] + x[v2,v1] + x[wp1,v2] + x[wp2,wp1] >= 1)
+                    m += (c_return_return[(wp1,v1),(wp2,v2)] + x[v1,wp2] + x[wp2,wp1] + x[wp1,v2] >= 1)
+                    m += (c_return_return[(wp1,v1),(wp2,v2)] + x[wp2,v1] + x[wp1,wp2] + x[v2,wp1] >= 1)
+                    m += (c_return_return[(wp1,v1),(wp2,v2)] + x[wp1,v2] + x[v2,v1] + x[v1,wp2] >= 1)
+                    m += (c_return_return[(wp1,v1),(wp2,v2)] + x[v2,wp1] + x[v1,v2] + x[wp2,v1] >= 1)
+                    m += (c_return_return[(wp1,v1),(wp2,v2)] + x[wp1,wp2] + x[wp2,v1] + x[v1,v2] >= 1)
+                    m += (c_return_return[(wp1,v1),(wp2,v2)] + x[wp2,wp1] + x[v1,wp2] + x[v2,v1] >= 1)
+                    
+    ##########################################################################################################
+    # MAXIMISE THE STRAIGHTNESS
+    ##########################################################################################################
+    
+    # Unpack the model input dictionary
+    node_layer_set1 = straightness_model['node_layer_set']
+    node_band_set1 = straightness_model['node_band_set']
+    edges1 = straightness_model['edges']
+    edge_weight1 = straightness_model['edge_weight']
+    node_weight1 = straightness_model['node_weight']
+    
+    # Create all the y variables - one for every node
+    y = { node: m.add_var(var_type=CONTINUOUS) 
+         for layer in node_layer_set1 for node in layer
+        }
+    
+    # Create a list of all the node pairings in each layer
+    pairs = [[ (u1,u2) for u1 in layer 
+                       for u2 in layer 
+                       if u1 != u2 ] 
+                      for layer in node_layer_set1 ]
+
+    # Create a dictionary of binary decision variables called 'x' containing the relative positions of the nodes in a layer
+    dx = { k: m.add_var(var_type=CONTINUOUS) for layer in pairs for k in layer }
+    
+    # Create the white space variables 
+    d = {}
+    for i in range(len(node_layer_set1)):
+        
+        # Add the base_line to first node variable
+        d[f'b{i}'] = m.add_var(var_type=CONTINUOUS, lb = 0)
+        
+        # loop through all the nodes
+        for node in node_layer_set1[i]:
+            d[node] = m.add_var(var_type=CONTINUOUS, lb = wslb, ub = wsub)
+                
+    # Create all the deviation variables
+    s = {}
+    for edge in edges1:
+        s[edge] = m.add_var(var_type=CONTINUOUS)
+        
+    ### Now go through and create the constraints
+    
+    ## First create the constraints linking y values to white_spaces and weights
+
+    # Loop through all layers and add the constraint
+    for i, layer in enumerate(node_layer_set1):
+        
+        # Loop through all the nodes in the layer
+        for u in layer:
+            
+            # Loop through and add all the constraints for the dx variable 
+            for v in layer:
+                if v != u:
+                    # Add all the 4 constraints 
+                    m += ( dx[v,u] <= wsub * x[v,u] )
+                    m += ( dx[v,u] >= wslb * x[v,u] )
+                    m += ( dx[v,u] <= d[v] - wslb * (1-x[v,u]) )
+                    m += ( dx[v,u] >= d[v] - wsub * (1-x[v,u]) )
+
+            # Add the constraint
+            #m += ( d[f'b{i}'] + xsum( (node_weight1[v] + d[v])*x[v,u] for v in layer if v != u ) )
+            m += ( d[f'b{i}'] + xsum( (node_weight1[v]*x[v,u] + dx[v,u]) for v in layer if v != u ) == y[u] )
+                
+    ## Create all the straightness constraints
+
+    # Loop through all the edges and add the two required constraints 
+    for (u,v) in edges1:
+        m += (s[(u,v)] >= y[u] - y[v])
+        m += (s[(u,v)] >= -(y[u] - y[v]))
+
+    ## Create all the band constraints (ie higher bands above lower bands)
+
+    # Loop through the node_band_set and add all the nodes accordingly 
+    # First loop through 
+    for i, bandu in enumerate(node_band_set1):
+        for u in bandu:
+
+            # Now for each 'u' node loop through all the other nodes
+            for j, bandv in enumerate(node_band_set1):
+                for v in bandv:
+
+                    # Only add the constraint if the second band is greater than the first
+                    if j > i:
+                        m += (y[v] >= y[u] + node_weight1[u])
+    
+    #########################################################################################################
+    ### Objective Function
+    #########################################################################################################
+
+    m.objective = minimize( # Area of main edge crossings
+                           crossing_weight * ( 
+                           xsum(edge_weight[u1v1]*edge_weight[u2v2]*c_main_main[u1v1,u2v2]
+                                for (u1v1,u2v2) in c_main_main.keys()) +
+                            # Area of crossings between exit and main edges
+                           xsum(edge_weight[u1v1]*edge_weight[u2wp]*c_exit_forward[u1v1,u2wp]
+                                for (u1v1,u2wp) in c_exit_forward.keys()) +
+                            # Area of crossings between exit edges
+                           xsum(edge_weight[u1wp1]*edge_weight[u2wp2]*c_exit_exit[u1wp1,u2wp2]
+                                for (u1wp1,u2wp2) in c_exit_exit.keys()) +
+                            # Area of crossings between return and main edges
+                           xsum(edge_weight[u1v1]*edge_weight[wpv2]*c_return_forward[u1v1,wpv2]
+                                for (u1v1,wpv2) in c_return_forward.keys()) +
+                            # Area of crossings between return edges
+                           xsum(edge_weight[wp1v1]*edge_weight[wp2v2]*c_return_return[wp1v1,wp2v2]
+                                for (wp1v1,wp2v2) in c_return_return.keys()) 
+                           ) +
+                           straightness_weight * (
+                           xsum(s[edge]*edge_weight[edge] for edge in s.keys())
+                           )
+                          )
+                          
+    # Run the model and optimise!
+    status = m.optimize(max_solutions = 500)
+    
+    #########################################################################################################
+    ### Decode Solution
+    #########################################################################################################
+
+    ### Decode the solution by running through and creating simplified dictionary
+    y_coordinates = {}
+    for node in y:
+        y_coordinates[node] = y[node].x
+        
+    ### Define a function that decodes the solution (i.e. compares nodes in a layer)
+
+    def cmp_nodes(u1,u2):
+        # If the optmimised x is >= 0.99 then u1 above u2 - thus u1 comes first
+        if x[u1,u2].x >= 0.99:
+            return -1
+        else:
+            return 1
+        
+    ### Return Solution
+
+    # Optimised node order arranged in layers
+    sorted_order = [ sorted(layer,key=cmp_to_key(cmp_nodes)) for layer in node_layer_set ]
+
+    # Optimised order arranged in layers and bands
+    banded_order = [[] for i in range(len(node_layer_set))]
+
+    for i in range(len(node_layer_set)):
+        start_index = 0
+        for band in node_band_set:
+            end_index = len(band[i]) + start_index
+            banded_order[i].append(sorted_order[i][start_index:end_index])
+            start_index = end_index
+            
+    return banded_order, y_coordinates
 
 
 

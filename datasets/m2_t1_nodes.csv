@@ -1,0 +1,8 @@
+id,band,layer,type
+node1,0,0,group1
+node2,0,0,group1
+node3,0,0,group1
+node4,0,0,
+node5,0,1,group2
+node6,0,1,group2
+node7,0,1,

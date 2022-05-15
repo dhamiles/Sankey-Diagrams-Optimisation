@@ -143,7 +143,7 @@ def generate_waypoints_bundles(node_def, flows, ordering, nodes, group_by = 'id'
             # If the bundle isn't in the bundles list and the layers are not the same
             elif ((Bundle(node_group[flow['source']],
                          node_group[flow['target']],
-                         waypoints=['wp' + str(source),'wp' + str(target)]) not in bundles) and 
+                         waypoints=['wp' + str(source),'wp' + str(target)]) not in bundles) and
                 target != source):
                 bundles.append(Bundle(node_group[flow['source']],
                                       node_group[flow['target']],
